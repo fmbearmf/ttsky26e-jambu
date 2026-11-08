@@ -1,5 +1,6 @@
 .DS_Store
 .idea
+/.direnv/
 *.vcd
 *.fst
 *.fst.hier
