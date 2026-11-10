@@ -5,7 +5,7 @@ project:
   discord:      "lord.foog.the.2st."      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
   description:  "An implementation of the TinyJAMBU-128 cryptographic cipher."      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
-  clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
+  clock_hz:     20000000       # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
   tiles: "1x2"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
@@ -25,22 +25,22 @@ pinout:
   # Inputs
   ui[0]: "data_in[0]"
   ui[1]: "data_in[1]"
-  ui[2]: ""
-  ui[3]: ""
-  ui[4]: ""
-  ui[5]: ""
-  ui[6]: ""
-  ui[7]: ""
+  ui[2]: "data_in[2]"
+  ui[3]: "data_in[3]"
+  ui[4]: "data_in[4]"
+  ui[5]: "data_in[5]"
+  ui[6]: "data_in[6]"
+  ui[7]: "data_in[7]"
 
   # Outputs
-  uo[0]: ""
-  uo[1]: ""
-  uo[2]: ""
-  uo[3]: ""
-  uo[4]: ""
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  uo[0]: "data_out[0]"
+  uo[1]: "data_out[1]"
+  uo[2]: "data_out[2]"
+  uo[3]: "data_out[3]"
+  uo[4]: "data_out[4]"
+  uo[5]: "data_out[5]"
+  uo[6]: "data_out[6]"
+  uo[7]: "data_out[7]"
 
   # Bidirectional pins
   uio[0]: "in_valid"
@@ -48,9 +48,9 @@ pinout:
   uio[2]: "cmd[0]"
   uio[3]: "cmd[1]"
   uio[4]: "cmd[2]"
-  uio[5]: "is_ready (out)"
-  uio[6]: "out_valid (out)"
-  uio[7]: "out_last (out)"
+  uio[5]: "is_ready"
+  uio[6]: "out_valid"
+  uio[7]: "out_last"
 
 # Do not change!
 yaml_version: 6

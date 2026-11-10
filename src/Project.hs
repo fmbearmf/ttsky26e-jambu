@@ -71,7 +71,7 @@ data JambuState = JambuState
     , k2            :: !(BitVector 32)
     , k3            :: !(BitVector 32)
     , stepCnt       :: !(Index 33)
-    , bitCnt        :: !(Unsigned 5)
+    , bitCnt        :: !(Unsigned 2)
     , byteBuf       :: !(BitVector 32)
     , bufCnt        :: !(Index 4)
     , keyByteCnt    :: !(Index 16)
@@ -102,20 +102,20 @@ initState = JambuState
     , outLen        = 0
     }
 
-stepBit
+stepByte
     :: (BitVector 32, BitVector 32, BitVector 32, BitVector 32)
-    -> BitVector 1
+    -> BitVector 8
     -> (BitVector 32, BitVector 32, BitVector 32, BitVector 32)
-stepBit (w0, w1, w2, w3) keyBit = (n0, n1, n2, n3)
+stepByte (w0, w1, w2, w3) keyByte = (n0, n1, n2, n3)
   where
     fb = (w0 `xor` (w1 `shiftR` 15)
           `xor` complement ((w2 `shiftR` 6) .&. (w2 `shiftR` 21))
-          `xor` (w2 `shiftR` 27)
-          `xor` zeroExtend keyBit) .&. 1
-    n0 = (w0 `shiftR` 1) .|. (w1 `shiftL` 31)
-    n1 = (w1 `shiftR` 1) .|. (w2 `shiftL` 31)
-    n2 = (w2 `shiftR` 1) .|. (w3 `shiftL` 31)
-    n3 = (w3 `shiftR` 1) .|. (fb `shiftL` 31)
+          `xor` ((w2 `shiftR` 27) .|. (w3 `shiftL` 5))
+          `xor` zeroExtend keyByte) .&. 0xFF
+    n0 = (w0 `shiftR` 8) .|. (w1 `shiftL` 24)
+    n1 = (w1 `shiftR` 8) .|. (w2 `shiftL` 24)
+    n2 = (w2 `shiftR` 8) .|. (w3 `shiftL` 24)
+    n3 = (w3 `shiftR` 8) .|. (fb `shiftL` 24)
 
 insertByte :: BitVector 32 -> Index 4 -> BitVector 8 -> BitVector 32
 insertByte buf 0 b = (buf .&. 0xFFFF_FF00) .|. zeroExtend b
@@ -160,16 +160,16 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                .|. (if outValid then 0x40 else 0)
                .|. (if isReady  then 0x20 else 0)
 
-        keyBit :: BitVector 1
-        keyBit = case (stepCnt st `mod` 4) of
-            0 -> truncateB (k0 st `shiftR` fromIntegral (bitCnt st))
-            1 -> truncateB (k1 st `shiftR` fromIntegral (bitCnt st))
-            2 -> truncateB (k2 st `shiftR` fromIntegral (bitCnt st))
-            _ -> truncateB (k3 st `shiftR` fromIntegral (bitCnt st))
+        keyByte :: BitVector 8
+        keyByte = case (stepCnt st `mod` 4) of
+            0 -> truncateB (k0 st `shiftR` (fromIntegral (bitCnt st) * 8))
+            1 -> truncateB (k1 st `shiftR` (fromIntegral (bitCnt st) * 8))
+            2 -> truncateB (k2 st `shiftR` (fromIntegral (bitCnt st) * 8))
+            _ -> truncateB (k3 st `shiftR` (fromIntegral (bitCnt st) * 8))
 
-        (ns0, ns1, ns2, ns3) = stepBit (s0 st, s1 st, s2 st, s3 st) keyBit
+        (ns0, ns1, ns2, ns3) = stepByte (s0 st, s1 st, s2 st, s3 st) keyByte
 
-        wordDone = bitCnt st == 31
+        wordDone = bitCnt st == 3
         longPerm = case permAction st of
             ActKeySetup -> True
             ActEncFull  -> True
