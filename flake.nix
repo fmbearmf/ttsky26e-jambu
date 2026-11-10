@@ -85,8 +85,8 @@
           buildPhase = ''
             runHook preBuild
 
-            mkdir -p src/verilog/
-            ln -sv "${artifact}/Project.topEntity" src/verilog/Project.topEntity
+            mkdir -p src
+            cp -f ${artifact}/Project.topEntity/*.v src/
 
             cd test
             make SRC_DIR="$PWD/../src"

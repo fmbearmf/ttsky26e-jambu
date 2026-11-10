@@ -1,5 +1,4 @@
 name: fpga
-
 on:
   push:
     # Comment out (or remove) the following line to run the FPGA workflow on every push:
@@ -15,5 +14,17 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v15
+
+      - name: Build Verilog from Clash
+        run: |
+          nix build .#verilog
+          mkdir -p src
+          cp -f result/Project.topEntity/*.v src/
+
       - name: FPGA bitstream for TT ASIC Sim (ICE40UP5K)
-        uses: TinyTapeout/tt-gds-action/fpga/ice40up5k@ttsky26d
+        uses: TinyTapeout/tt-gds-action/fpga/ice40up5k@ttsky26e

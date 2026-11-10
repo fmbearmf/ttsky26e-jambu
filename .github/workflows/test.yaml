@@ -1,5 +1,13 @@
 name: test
-on: [push, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -9,40 +17,33 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install iverilog
-        shell: bash
-        run: sudo apt-get update && sudo apt-get install -y iverilog
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v23
 
-      # Set Python up and install cocotb
-      - name: Setup python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v15
 
-      - name: Install Python packages
-        shell: bash
-        run: pip install -r test/requirements.txt
-
-      - name: Run tests
+      - name: Generate Verilog from Clash
         run: |
-          cd test
-          make clean
-          make
-          # make will return success even if the tests fail, so check results.xml for failed tests
-          python -m cocotb_tools.check_results results.xml
+          nix build .#verilog
+          mkdir -p src
+          cp -f result/Project.topEntity/*.v src/
+
+      - name: Run Cocotb Tests
+        run: nix develop --command make -C test
 
       - name: Test Summary
-        uses: test-summary/action@v2.4
+        uses: test-summary/action@v2
         with:
           paths: "test/results.xml"
         if: always()
 
-      - name: upload waveform and test results
-        if: success() || failure()
+      - name: Upload Test Artifacts
         uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: test-results
+          name: test-artifacts
           path: |
-            test/tb.fst
             test/results.xml
-            test/output/*
+            test/tb.vcd
+            test/tb.fst

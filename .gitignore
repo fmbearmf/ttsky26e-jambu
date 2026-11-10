@@ -1,7 +1,7 @@
 .DS_Store
 .idea
 /.direnv/
-/result/
+/result
 *.vcd
 *.fst
 *.fst.hier
@@ -13,3 +13,9 @@ test/sim_build
 test/__pycache__/
 test/results.xml
 test/gate_level_netlist.v
+
+/src/tt_um_*.v
+/src/Project.topEntity/
+/src/verilog/
+/.clash/
+/build/

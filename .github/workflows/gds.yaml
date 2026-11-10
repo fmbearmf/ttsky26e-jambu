@@ -1,5 +1,4 @@
 name: gds
-
 on:
   push:
   workflow_dispatch:
@@ -13,8 +12,20 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v15
+
+      - name: Build Verilog from Clash
+        run: |
+          nix build .#verilog
+          mkdir -p src
+          cp -f result/Project.topEntity/*.v src/
+
       - name: Build GDS
-        uses: TinyTapeout/tt-gds-action@ttsky26d
+        uses: TinyTapeout/tt-gds-action@ttsky26e
         with:
           pdk: sky130A
 
@@ -23,7 +34,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Run Tiny Tapeout Precheck
-        uses: TinyTapeout/tt-gds-action/precheck@ttsky26d
+        uses: TinyTapeout/tt-gds-action/precheck@ttsky26e
 
   gl_test:
     needs: gds
@@ -35,7 +46,7 @@ jobs:
           submodules: recursive
 
       - name: GL test
-        uses: TinyTapeout/tt-gds-action/gl_test@ttsky26d
+        uses: TinyTapeout/tt-gds-action/gl_test@ttsky26e
 
   viewer:
     needs: gds
@@ -44,4 +55,4 @@ jobs:
       pages: write      # to deploy to Pages
       id-token: write   # to verify the deployment originates from an appropriate source
     steps:
-      - uses: TinyTapeout/tt-gds-action/viewer@ttsky26d
+      - uses: TinyTapeout/tt-gds-action/viewer@ttsky26e

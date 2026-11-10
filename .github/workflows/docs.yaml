@@ -1,5 +1,4 @@
 name: docs
-
 on:
   push:
   workflow_dispatch:
@@ -13,5 +12,17 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v15
+
+      - name: Build Verilog from Clash
+        run: |
+          nix build .#verilog
+          mkdir -p src
+          cp -f result/Project.topEntity/*.v src/
+
       - name: Build docs
-        uses: TinyTapeout/tt-gds-action/docs@ttsky26d
+        uses: TinyTapeout/tt-gds-action/docs@ttsky26e
