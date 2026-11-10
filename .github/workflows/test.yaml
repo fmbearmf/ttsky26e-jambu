@@ -30,7 +30,7 @@ jobs:
           cp -f result/Project.topEntity/*.v src/
 
       - name: Run Cocotb Tests
-        run: nix develop --command make -C test
+        run: nix develop --command bash -c "cd test && make"
 
       - name: Test Summary
         uses: test-summary/action@v2
