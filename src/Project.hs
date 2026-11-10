@@ -71,16 +71,13 @@ data JambuState = JambuState
     , k2            :: !(BitVector 32)
     , k3            :: !(BitVector 32)
     , stepCnt       :: !(Index 33)
-    , stepTotal     :: !(Index 33)
+    , bitCnt        :: !(Unsigned 5)
     , byteBuf       :: !(BitVector 32)
     , bufCnt        :: !(Index 4)
     , keyByteCnt    :: !(Index 16)
     , noneWordCnt   :: !(Index 4)
-    , dataWord      :: !(BitVector 32)
     , partialLen    :: !(Index 4)
-    , outBuf        :: !(BitVector 64)
-    , outLen        :: !(Index 9)
-    , tag0          :: !(BitVector 32)
+    , outLen        :: !(Index 5)
     } deriving (Generic, NFDataX, Show)
 
 initState :: JambuState
@@ -96,31 +93,29 @@ initState = JambuState
     , k2            = 0
     , k3            = 0
     , stepCnt       = 0
-    , stepTotal     = 0
+    , bitCnt        = 0
     , byteBuf       = 0
     , bufCnt        = 0
     , keyByteCnt    = 0
     , noneWordCnt   = 0
-    , dataWord      = 0
     , partialLen    = 0
-    , outBuf        = 0
     , outLen        = 0
-    , tag0          = 0
     }
 
--- 32 rounds of NLFSR in parallel
-step32
+stepBit
     :: (BitVector 32, BitVector 32, BitVector 32, BitVector 32)
-    -> BitVector 32
+    -> BitVector 1
     -> (BitVector 32, BitVector 32, BitVector 32, BitVector 32)
-step32 (w0, w1, w2, w3) kWord = (w1, w2, w3, feedback)
-    where
-        t1 = (w1 `shiftR` 15) .|. (w2 `shiftL` 17)
-        t2 = (w2 `shiftR` 6)  .|. (w3 `shiftL` 26)
-        t3 = (w2 `shiftR` 21) .|. (w3 `shiftL` 11)
-        t4 = (w2 `shiftR` 27) .|. (w3 `shiftL` 5)
-
-        feedback = w0 `xor` t1 `xor` complement (t2 .&. t3) `xor` t4 `xor` kWord
+stepBit (w0, w1, w2, w3) keyBit = (n0, n1, n2, n3)
+  where
+    fb = (w0 `xor` (w1 `shiftR` 15)
+          `xor` complement ((w2 `shiftR` 6) .&. (w2 `shiftR` 21))
+          `xor` (w2 `shiftR` 27)
+          `xor` zeroExtend keyBit) .&. 1
+    n0 = (w0 `shiftR` 1) .|. (w1 `shiftL` 31)
+    n1 = (w1 `shiftR` 1) .|. (w2 `shiftL` 31)
+    n2 = (w2 `shiftR` 1) .|. (w3 `shiftL` 31)
+    n3 = (w3 `shiftR` 1) .|. (fb `shiftL` 31)
 
 insertByte :: BitVector 32 -> Index 4 -> BitVector 8 -> BitVector 32
 insertByte buf 0 b = (buf .&. 0xFFFF_FF00) .|. zeroExtend b
@@ -139,9 +134,8 @@ partialLenWord :: Index 4 -> BitVector 32
 partialLenWord 1 = 1
 partialLenWord 2 = 2
 partialLenWord 3 = 3
-partialLenWord _ = 0
 
-partialLenOut :: Index 4 -> Index 9
+partialLenOut :: Index 4 -> Index 5
 partialLenOut 1 = 1
 partialLenOut 2 = 2
 partialLenOut 3 = 3
@@ -159,25 +153,38 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
 
         isReady  = (fsmState st == StateIdle)
         outValid = (fsmState st == StateOut)
-        outLast  = outValid && (outLen st == 1)
-        uoOut    = if outValid then resize (outBuf st .&. 0xFF) else 0
+        outLast  = outValid && (outLen st == 1) && (permAction st /= ActFinPart1)
+        uoOut    = if outValid then resize (byteBuf st .&. 0xFF) else 0
 
         uioOut   = (if outLast  then 0x80 else 0)
                .|. (if outValid then 0x40 else 0)
                .|. (if isReady  then 0x20 else 0)
 
-        kWord = case (stepCnt st `mod` 4) of
-            0 -> k0 st
-            1 -> k1 st
-            2 -> k2 st
-            _ -> k3 st
+        keyBit :: BitVector 1
+        keyBit = case (stepCnt st `mod` 4) of
+            0 -> truncateB (k0 st `shiftR` fromIntegral (bitCnt st))
+            1 -> truncateB (k1 st `shiftR` fromIntegral (bitCnt st))
+            2 -> truncateB (k2 st `shiftR` fromIntegral (bitCnt st))
+            _ -> truncateB (k3 st `shiftR` fromIntegral (bitCnt st))
 
-        (ns0, ns1, ns2, ns3) = step32 (s0 st, s1 st, s2 st, s3 st) kWord
-        isPermutationDone = (stepCnt st + 1 == stepTotal st)
+        (ns0, ns1, ns2, ns3) = stepBit (s0 st, s1 st, s2 st, s3 st) keyBit
+
+        wordDone = bitCnt st == 31
+        longPerm = case permAction st of
+            ActKeySetup -> True
+            ActEncFull  -> True
+            ActEncPart  -> True
+            ActDecFull  -> True
+            ActDecPart  -> True
+            ActFinPart1 -> True
+            _           -> False
+        isPermutationDone = wordDone &&
+            (if longPerm then stepCnt st == 31 else stepCnt st == 19)
 
         nextState = case fsmState st of
             StateIdle
                 | inValid && cmd == 7 -> initState -- reset command
+
                 | inValid && cmd == 1 -> -- key command
                     let wordIndex = keyByteCnt st `div` 4
                         byteIndex = resize (keyByteCnt st `mod` 4) :: Index 4
@@ -198,7 +205,7 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                                 , s2         = 0
                                 , s3         = 0
                                 , stepCnt    = 0
-                                , stepTotal  = 32
+                                , bitCnt     = 0
                                 , keyByteCnt = 0
                                 }
                         else st { k0 = nk0, k1 = nk1, k2 = nk2, k3 = nk3
@@ -211,9 +218,9 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                         then st { fsmState   = StatePermutation
                                 , permAction = ActNonceWord
                                 , s1         = s1 st `xor` 0x10
-                                , dataWord   = newBuf
+                                , byteBuf    = newBuf
                                 , stepCnt    = 0
-                                , stepTotal  = 20
+                                , bitCnt     = 0
                                 , bufCnt     = 0
                                 }
                         else st { byteBuf = newBuf, bufCnt = bufCnt st + 1 }
@@ -224,9 +231,9 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                         then st { fsmState   = StatePermutation
                                 , permAction = ActADFull
                                 , s1         = s1 st `xor` 0x30
-                                , dataWord   = newBuf
+                                , byteBuf    = newBuf
                                 , stepCnt    = 0
-                                , stepTotal  = 20
+                                , bitCnt     = 0
                                 , bufCnt     = 0
                                 }
                         else if inLast
@@ -234,10 +241,10 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                             in st { fsmState   = StatePermutation
                                   , permAction = ActADPart
                                   , s1         = s1 st `xor` 0x30
-                                  , dataWord   = newBuf .&. maskLen lenP
+                                  , byteBuf    = newBuf .&. maskLen lenP
                                   , partialLen = lenP
                                   , stepCnt    = 0
-                                  , stepTotal  = 20
+                                , bitCnt     = 0
                                   , bufCnt     = 0
                                   }
                         else st { byteBuf = newBuf, bufCnt = bufCnt st + 1 }
@@ -248,9 +255,9 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                         then st { fsmState   = StatePermutation
                                 , permAction = ActEncFull
                                 , s1         = s1 st `xor` 0x50
-                                , dataWord   = newBuf
+                                , byteBuf    = newBuf
                                 , stepCnt    = 0
-                                , stepTotal  = 32
+                                , bitCnt     = 0
                                 , bufCnt     = 0
                                 }
                         else if inLast
@@ -258,10 +265,10 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                             in st { fsmState   = StatePermutation
                                   , permAction = ActEncPart
                                   , s1         = s1 st `xor` 0x50
-                                  , dataWord   = newBuf .&. maskLen lenP
+                                  , byteBuf    = newBuf .&. maskLen lenP
                                   , partialLen = lenP
                                   , stepCnt    = 0
-                                  , stepTotal  = 32
+                                , bitCnt     = 0
                                   , bufCnt     = 0
                                   }
                         else st { byteBuf = newBuf, bufCnt = bufCnt st + 1 }
@@ -272,9 +279,10 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                     then st { fsmState   = StatePermutation
                             , permAction = ActDecFull
                             , s1         = s1 st `xor` 0x50
-                            , dataWord   = newBuf
+                            , byteBuf    = newBuf
                             , stepCnt    = 0
-                            , stepTotal  = 32
+                                  , bitCnt     = 0
+
                             , bufCnt     = 0
                             }
                     else if inLast
@@ -282,10 +290,11 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                         in st { fsmState   = StatePermutation
                               , permAction = ActDecPart
                               , s1         = s1 st `xor` 0x50
-                              , dataWord   = newBuf .&. maskLen lenP
+                              , byteBuf    = newBuf .&. maskLen lenP
                               , partialLen = lenP
                               , stepCnt    = 0
-                              , stepTotal  = 32
+                                  , bitCnt     = 0
+
                               , bufCnt     = 0
                               }
                     else st { byteBuf = newBuf, bufCnt = bufCnt st + 1 }
@@ -295,114 +304,60 @@ jambuStep st (uiIn, uioIn) = (nextState, (uoOut, uioOut))
                        , permAction = ActFinPart1
                        , s1         = s1 st `xor` 0x70
                        , stepCnt    = 0
-                       , stepTotal  = 32
+                                  , bitCnt     = 0
+
                        }
 
                 | otherwise -> st
 
-            StatePermutation
-                | not isPermutationDone ->
-                    st { stepCnt = stepCnt st + 1
-                       , s0      = ns0
-                       , s1      = ns1
-                       , s2      = ns2
-                       , s3      = ns3
-                       }
-                | otherwise -> case permAction st of
-                    ActKeySetup ->
-                        st { fsmState = StateIdle
-                           , s0       = ns0
-                           , s1       = ns1
-                           , s2       = ns2
-                           , s3       = ns3
-                           }
-                    ActNonceWord ->
-                        let nextNonceCnt    = noneWordCnt st + 1
-                        in st { fsmState    = StateIdle
-                              , s0          = ns0
-                              , s1          = ns1
-                              , s2          = ns2
-                              , s3          = ns3 `xor` dataWord st
-                              , noneWordCnt = if nextNonceCnt == 3 then 0 else nextNonceCnt
-                              }
-                    ActADFull ->
-                        st { fsmState = StateIdle
-                           , s0       = ns0
-                           , s1       = ns1
-                           , s2       = ns2
-                           , s3       = ns3 `xor` dataWord st
-                           }
-                    ActADPart ->
-                        st { fsmState = StateIdle
-                           , s0       = ns0
-                           , s1       = ns1 `xor` partialLenWord (partialLen st)
-                           , s2       = ns2
-                           , s3       = ns3 `xor` dataWord st
-                           }
-                    ActEncFull ->
-                        let ctWord = dataWord st `xor` ns2
-                        in st { fsmState = StateOut
-                              , s0       = ns0
-                              , s1       = ns1
-                              , s2       = ns2
-                              , s3       = ns3 `xor` dataWord st
-                              , outBuf   = zeroExtend ctWord
-                              , outLen   = 4
-                              }
-                    ActEncPart ->
-                        let ctWord = dataWord st `xor` ns2
-                        in st { fsmState = StateOut
-                              , s0       = ns0
-                              , s1       = ns1 `xor` partialLenWord (partialLen st)
-                              , s2       = ns2
-                              , s3       = ns3 `xor` dataWord st
-                              , outBuf   = zeroExtend ctWord
-                              , outLen   = partialLenOut (partialLen st)
-                              }
-                    ActDecFull ->
-                        let ptWord = dataWord st `xor` ns2
-                        in st { fsmState = StateOut
-                              , s0       = ns0
-                              , s1       = ns1
-                              , s2       = ns2
-                              , s3       = ns3 `xor` ptWord
-                              , outBuf   = zeroExtend ptWord
-                              , outLen   = 4
-                              }
-                    ActDecPart ->
-                        let ptWord = (dataWord st `xor` ns2) .&. maskLen (partialLen st)
-                        in st { fsmState = StateOut
-                              , s0       = ns0
-                              , s1       = ns1 `xor` partialLenWord (partialLen st)
-                              , s2       = ns2
-                              , s3       = ns3 `xor` ptWord
-                              , outBuf   = zeroExtend ptWord
-                              , outLen   = partialLenOut (partialLen st)
-                              }
-                    ActFinPart1 ->
-                        st { fsmState   = StatePermutation
-                           , permAction = ActFinPart2
-                           , s0         = ns0
-                           , s1         = ns1 `xor` 0x70
-                           , s2         = ns2
-                           , s3         = ns3
-                           , tag0       = ns2
-                           , stepCnt    = 0
-                           , stepTotal  = 20
-                           }
-                    ActFinPart2 ->
-                        let fullTag = (zeroExtend ns2 `shiftL` 32) .|. zeroExtend (tag0 st)
-                        in st { fsmState = StateOut
-                              , s0       = ns0
-                              , s1       = ns1
-                              , s2       = ns2
-                              , s3       = ns3
-                              , outBuf   = fullTag
-                              , outLen   = 8
-                              }
+            StatePermutation ->
+                let done  = isPermutationDone
+                    act   = permAction st
+                    isAD  = act == ActADFull || act == ActADPart
+                    isEnc = act == ActEncFull || act == ActEncPart
+                    isDec = act == ActDecFull || act == ActDecPart
+                    isCrypt = isEnc || isDec
+                    isPart  = act == ActADPart || act == ActEncPart || act == ActDecPart
+                    inject = act == ActNonceWord || isAD || isCrypt
+                    msgWord = byteBuf st
+
+                    result = msgWord `xor` ns2
+                    plainWord = if act == ActDecPart
+                                then result .&. maskLen (partialLen st)
+                                else if isDec then result else msgWord
+
+                    newS1 = if done && isPart
+                            then ns1 `xor` partialLenWord (partialLen st)
+                            else ns1
+                    newS3 = if done && inject then ns3 `xor` plainWord else ns3
+                    emit = done && (isCrypt || act == ActFinPart1 || act == ActFinPart2)
+                    newBuf = if isCrypt then (if isEnc then result else plainWord) else ns2
+                    newLen = if isPart then partialLenOut (partialLen st) else 4
+                    newNonceCnt = if noneWordCnt st == 2 then 0 else noneWordCnt st + 1
+                in st { fsmState = if done then (if emit then StateOut else StateIdle) else StatePermutation
+                      , s0 = ns0
+                      , s1 = newS1
+                      , s2 = ns2
+                      , s3 = newS3
+                      , stepCnt = if wordDone && not done then stepCnt st + 1 else stepCnt st
+                      , bitCnt = bitCnt st + 1
+                      , byteBuf = if emit then newBuf else byteBuf st
+                      , outLen = if emit then newLen else outLen st
+                      , noneWordCnt = if done && act == ActNonceWord
+                                      then newNonceCnt else noneWordCnt st
+                      }
+
             StateOut
+                | outLen st == 1 && permAction st == ActFinPart1 ->
+                    st { fsmState = StatePermutation
+                       , permAction = ActFinPart2
+                       , s1 = s1 st `xor` 0x70
+                       , stepCnt = 0
+                       , bitCnt = 0
+                       , outLen = 0
+                       }
                 | outLen st == 1 -> st { fsmState = StateIdle, outLen = 0 }
-                | otherwise      -> st { outLen = outLen st - 1, outBuf = outBuf st `shiftR` 8 }
+                | otherwise      -> st { outLen = outLen st - 1, byteBuf = byteBuf st `shiftR` 8 }
 
 jambu
     :: (HiddenClockResetEnable TTDom)
